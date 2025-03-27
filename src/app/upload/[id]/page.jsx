@@ -12,7 +12,8 @@ import {
   ArrowLeft,
   SkipBack,
   SkipForward,
-  Shuffle
+  Shuffle,
+  MessageCircle
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -25,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { open as openEmbed } from "@play-ai/agent-web-sdk";
 
 // Import pdfjs-dist
 import * as pdfjsLib from 'pdfjs-dist';
@@ -244,6 +246,57 @@ export default function PDFViewerPage() {
     'Preparing for playback...'
   ];
   
+  // Add new state for chat events
+  const [currentPageText, setCurrentPageText] = useState("");
+
+  // Define events for the PlayAI agent
+  const events = [
+    {
+      name: "get-page-content",
+      when: "The user asks about the content of the current page",
+      data: {
+        pageNumber: { type: "number", description: "The page number to get content from" },
+      },
+    },
+    {
+      name: "navigate-page",
+      when: "The user wants to navigate to a specific page",
+      data: {
+        pageNumber: { type: "number", description: "The page number to navigate to" },
+      },
+    }
+  ];
+
+  // Handle events from the PlayAI agent
+  const onEvent = (event) => {
+    console.log("onEvent: ", event);
+    if (event.name === "get-page-content") {
+      const pageNum = event.data.pageNumber || currentPage;
+      const pageText = extractedPageCache[pageNum];
+      if (pageText) {
+        setCurrentPageText(pageText);
+      }
+    } else if (event.name === "navigate-page") {
+      const pageNum = event.data.pageNumber;
+      if (pageNum >= 1 && pageNum <= totalPages) {
+        setCurrentPage(pageNum);
+      }
+    }
+  };
+
+  // Initialize the PlayAI web embed
+  useEffect(() => {
+    openEmbed('0CArRskmhcVYECqPuNXIH', { events, onEvent });
+  }, []);
+
+  // Update current page text when page changes
+  useEffect(() => {
+    const pageText = extractedPageCache[currentPage];
+    if (pageText) {
+      setCurrentPageText(pageText);
+    }
+  }, [currentPage, extractedPageCache]);
+
   // Function to render the current page
   const renderPage = useCallback(async (pageNum) => {
     if (!pdfDoc) return;
@@ -1218,10 +1271,6 @@ export default function PDFViewerPage() {
     };
   }, []);
 
-  if (!pdfUrl) {
-    return <div className="flex justify-center items-center h-screen">Loading...</div>;
-  }
-
   return (
     <div className="container mx-auto py-10 px-4">
       <div className="mb-6 items-center">
@@ -1422,4 +1471,4 @@ export default function PDFViewerPage() {
       </div>
     </div>
   );
-} 
+}
