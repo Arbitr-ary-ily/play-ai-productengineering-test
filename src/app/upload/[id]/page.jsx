@@ -37,6 +37,76 @@ const formatTime = (timeInSeconds) => {
   return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 };
 
+// Add AudioControls component for better organization
+const AudioControls = ({ 
+  isPlaying,
+  onPlayPause,
+  currentTime,
+  duration,
+  onSeek,
+  isLoading,
+  audioError,
+  hasExistingAudio,
+  continuousPlayback,
+  generationProgress,
+  onSliderChange,
+  onSliderCommit
+}) => {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center flex-grow gap-2">
+        <span className="text-sm font-medium text-gray-600">
+          {formatTime(currentTime)}
+        </span>
+        
+        <Slider
+          value={[currentTime || 0]}
+          max={duration || 100}
+          step={0.1}
+          onValueChange={onSliderChange}
+          onValueCommit={onSliderCommit}
+          disabled={isLoading || !duration}
+          className="flex-grow"
+        />
+        
+        <span className="text-sm font-medium text-gray-600">
+          {formatTime(duration)}
+        </span>
+      </div>
+
+      <Button 
+        variant={isPlaying ? "destructive" : "default"} 
+        onClick={onPlayPause}
+        disabled={isLoading}
+        className={isPlaying ? 
+          "bg-red-500 hover:bg-red-600 transition-all duration-300" : 
+          "bg-lime-500 hover:bg-lime-600 transition-all duration-300"
+        }
+      >
+        {isLoading ? (
+          <div className="flex items-center gap-2">
+            <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span>{generationProgress}%</span>
+          </div>
+        ) : isPlaying ? (
+          <>
+            <Pause className="w-4 h-4 mr-2" />
+            Pause
+          </>
+        ) : (
+          <>
+            <Play className="w-4 h-4 mr-2" />
+            {continuousPlayback ? 'Play Entire Book' : 'Play Page'}
+          </>
+        )}
+      </Button>
+    </div>
+  );
+};
+
 export default function PDFViewerPage() {
   const params = useParams();
   const router = useRouter();
@@ -58,6 +128,15 @@ export default function PDFViewerPage() {
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [audioError, setAudioError] = useState(null);
   const [continuousPlayback, setContinuousPlayback] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
+  
+  // Add text extraction states
+  const [extractedPageCache, setExtractedPageCache] = useState({});
+  const [isExtractingText, setIsExtractingText] = useState(false);
+  const [allPagesExtracted, setAllPagesExtracted] = useState(false);
+  
+  // Add audio caching state
+  const [cachedAudio, setCachedAudio] = useState({});
   
   const AVAILABLE_VOICES = [
     {
@@ -80,7 +159,42 @@ export default function PDFViewerPage() {
   const [selectedVoice, setSelectedVoice] = useState(AVAILABLE_VOICES[0].value);
   const [speed, setSpeed] = useState(1.0);
   const [temperature, setTemperature] = useState(1.0);
-  
+
+  // Function to extract text from a page
+  const extractPageText = async (pageNum) => {
+    if (extractedPageCache[pageNum]) return extractedPageCache[pageNum];
+    
+    try {
+      const page = await pdfDoc.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      const text = textContent.items
+        .map(item => item.str)
+        .join(' ')
+        .replace(/\\s+/g, ' ')
+        .trim();
+      
+      setExtractedPageCache(prev => ({
+        ...prev,
+        [pageNum]: text
+      }));
+      
+      return text;
+    } catch (error) {
+      console.error(`Error extracting text from page ${pageNum}:`, error);
+      return null;
+    }
+  };
+
+  // Function to get text for continuous playback
+  const getTextForPages = async (startPage, endPage) => {
+    const texts = [];
+    for (let pageNum = startPage; pageNum <= endPage; pageNum++) {
+      const text = await extractPageText(pageNum);
+      if (text) texts.push(text);
+    }
+    return texts.join(' ');
+  };
+
   // Function to render the current page
   const renderPage = async (pageNum) => {
     if (!pdfDoc) return;
@@ -100,6 +214,11 @@ export default function PDFViewerPage() {
       };
       
       await page.render(renderContext).promise;
+      
+      // Extract text for the current page
+      if (!extractedPageCache[pageNum]) {
+        extractPageText(pageNum);
+      }
     } catch (error) {
       console.error('Error rendering page:', error);
     }
@@ -141,6 +260,7 @@ export default function PDFViewerPage() {
     }
   }, [currentPage, pdfDoc, scale]);
 
+  // Handle window resize
   useEffect(() => {
     const handleResize = () => {
       const width = Math.min(window.innerWidth - 48, 1200);
@@ -154,12 +274,66 @@ export default function PDFViewerPage() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Update audio time tracking
+  useEffect(() => {
+    if (audioRef.current) {
+      const audio = audioRef.current;
+      
+      const handleTimeUpdate = () => {
+        setCurrentTime(audio.currentTime);
+      };
+      
+      const handleDurationChange = () => {
+        setDuration(audio.duration);
+      };
+      
+      const handleEnded = () => {
+        setIsPlaying(false);
+        if (continuousPlayback && currentPage < totalPages) {
+          setCurrentPage(prev => prev + 1);
+        }
+      };
+      
+      audio.addEventListener('timeupdate', handleTimeUpdate);
+      audio.addEventListener('durationchange', handleDurationChange);
+      audio.addEventListener('ended', handleEnded);
+      
+      return () => {
+        audio.removeEventListener('timeupdate', handleTimeUpdate);
+        audio.removeEventListener('durationchange', handleDurationChange);
+        audio.removeEventListener('ended', handleEnded);
+      };
+    }
+  }, [continuousPlayback, currentPage, totalPages]);
+
+  // Clean up audio resources on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        if (audioRef.current.src) {
+          URL.revokeObjectURL(audioRef.current.src);
+        }
+      }
+      
+      // Clean up cached audio URLs
+      Object.values(cachedAudio).forEach(({ url }) => {
+        URL.revokeObjectURL(url);
+      });
+    };
+  }, []);
+
   const handleVoiceChange = (newVoice) => {
-    setSelectedVoice(newVoice);
     if (audioRef.current) {
       audioRef.current.pause();
-      setIsPlaying(false);
+      audioRef.current.src = '';
+      audioRef.current = null;
     }
+    setSelectedVoice(newVoice);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    setAudioError(null);
   };
 
   const handleSpeedChange = (value) => {
@@ -181,35 +355,104 @@ export default function PDFViewerPage() {
     }
   };
 
-  const handlePlayPause = async () => {
-    if (isPlaying) {
-      audioRef.current?.pause();
-      setIsPlaying(false);
-    } else {
+  const fetchAndPlayAudio = async (text, pageNum) => {
+    try {
       setIsLoadingAudio(true);
-      try {
-        // Simulated audio generation - replace with actual API call
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        const audio = new Audio('sample-audio-url');
-        audio.addEventListener('timeupdate', () => {
-          setCurrentTime(audio.currentTime);
-        });
-        audio.addEventListener('loadedmetadata', () => {
-          setDuration(audio.duration);
-        });
-        audio.addEventListener('ended', () => {
-          setIsPlaying(false);
-        });
-        
+      setAudioError(null);
+      setGenerationProgress(0);
+      
+      const cacheKey = `${id}-${pageNum}-${continuousPlayback ? 'continuous' : 'single'}-${selectedVoice}-${speed}-${temperature}`;
+      
+      // Check cache first
+      if (cachedAudio[cacheKey]) {
+        const { audio } = cachedAudio[cacheKey];
         audioRef.current = audio;
         await audio.play();
         setIsPlaying(true);
-      } catch (error) {
-        setAudioError('Error playing audio');
-      } finally {
         setIsLoadingAudio(false);
+        return;
       }
+      
+      // Simulate progress updates
+      const progressInterval = setInterval(() => {
+        setGenerationProgress(prev => Math.min(prev + 5, 95));
+      }, 500);
+      
+      const response = await fetch('/api/pdf-to-speech', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text,
+          voice: selectedVoice,
+          speed,
+          temperature,
+          pageNum,
+          continuous: continuousPlayback,
+        }),
+      });
+
+      clearInterval(progressInterval);
+
+      if (!response.ok) {
+        throw new Error('Failed to generate audio');
+      }
+
+      const data = await response.json();
+      const audioData = atob(data.audio);
+      const arrayBuffer = new ArrayBuffer(audioData.length);
+      const view = new Uint8Array(arrayBuffer);
+      for (let i = 0; i < audioData.length; i++) {
+        view[i] = audioData.charCodeAt(i);
+      }
+
+      const blob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+      const audioUrl = URL.createObjectURL(blob);
+      
+      const audio = new Audio(audioUrl);
+      audio.playbackRate = speed;
+      
+      // Cache the audio
+      setCachedAudio(prev => ({
+        ...prev,
+        [cacheKey]: { audio, url: audioUrl }
+      }));
+      
+      audioRef.current = audio;
+      await audio.play();
+      
+      setGenerationProgress(100);
+      setIsPlaying(true);
+      
+    } catch (error) {
+      console.error('Error generating audio:', error);
+      setAudioError(error.message);
+    } finally {
+      setIsLoadingAudio(false);
+    }
+  };
+
+  const handlePlayPause = async () => {
+    try {
+      if (isPlaying && audioRef.current) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+        return;
+      }
+
+      const text = continuousPlayback
+        ? await getTextForPages(currentPage, totalPages)
+        : await extractPageText(currentPage);
+
+      if (!text) {
+        throw new Error('No text available to read');
+      }
+
+      await fetchAndPlayAudio(text, currentPage);
+    } catch (error) {
+      console.error('Error in handlePlayPause:', error);
+      setAudioError(error.message);
     }
   };
 
@@ -307,44 +550,19 @@ export default function PDFViewerPage() {
             <span className="text-sm">{temperature.toFixed(1)}</span>
           </div>
 
-          <div className="flex items-center flex-grow gap-2">
-            <span className="text-sm">{formatTime(currentTime)}</span>
-            <Slider
-              value={[currentTime]}
-              max={duration || 100}
-              step={0.1}
-              onValueChange={handleSliderChange}
-              className="flex-grow"
-            />
-            <span className="text-sm">{formatTime(duration)}</span>
-          </div>
-
-          <Button 
-            variant={isPlaying ? "destructive" : "default"} 
-            onClick={handlePlayPause}
-            disabled={isLoadingAudio}
-            className={isPlaying ? "bg-red-500 hover:bg-red-600" : "bg-lime-500 hover:bg-lime-600"}
-          >
-            {isLoadingAudio ? (
-              <div className="flex items-center">
-                <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Loading...
-              </div>
-            ) : isPlaying ? (
-              <>
-                <Pause className="w-4 h-4 mr-2" />
-                Pause
-              </>
-            ) : (
-              <>
-                <Play className="w-4 h-4 mr-2" />
-                {continuousPlayback ? 'Play Entire Book' : 'Play Page'}
-              </>
-            )}
-          </Button>
+          <AudioControls
+            isPlaying={isPlaying}
+            onPlayPause={handlePlayPause}
+            currentTime={currentTime}
+            duration={duration}
+            onSliderChange={handleSliderChange}
+            onSliderCommit={handleSliderChange}
+            isLoading={isLoadingAudio}
+            audioError={audioError}
+            hasExistingAudio={!!audioRef.current}
+            continuousPlayback={continuousPlayback}
+            generationProgress={generationProgress}
+          />
         </div>
       </div>
 
