@@ -11,13 +11,14 @@ export const config = {
 };
 
 // API configuration
-const API_KEY = "ak-c3eaeadb838944cfaec82e41129a71f3";
-const USER_ID = "5jcbndHqeMg9yRPw95Ti5cVfNus2";
-const BASE_URL = "https://api.play.ai/api/v1";
+const API_KEY = process.env.API_KEY;
+const USER_ID = process.env.USER_ID;
+const BASE_URL = process.env.TTS_API_URL || "https://api.play.ai/api/v1";
 const DEFAULT_VOICE = 's3://voice-cloning-zero-shot/baf1ef41-36b6-428c-9bdf-50ba54682bd8/original/manifest.json';
 const MODEL_NAME = "PlayDialog";
 const OUTPUT_FORMAT = "mp3";
-const MAX_CHUNK_SIZE = 15000; // Play.ai limit is 20000, using 15000 for safety
+const MAX_CHUNK_SIZE = 15000; 
+const REQUEST_TIMEOUT = 55000; // 55 seconds timeout (leaving 5 seconds buffer)
 
 // In-memory cache for audio data
 const audioCache = new Map();

@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "src/app/api/pdf-to-speech/route.js": {
+      "maxDuration": 60
+    }
+  }
+} 
