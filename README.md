@@ -1,36 +1,62 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# PlayAI Book Reader
 
-## Getting Started
+A web app that lets you upload PDFs and listen to them using PlayAI's text-to-speech. Built with Next.js and a clean UI.
 
-First, run the development server:
+## Quick Start
 
+1. Clone the repo
+2. Install dependencies:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+3. Get your API keys:
+   - Sign up at [PlayAI](https://play.ai) to get your API key and user ID
+   - Create an account at [Uploadthing](https://uploadthing.com) to get your upload token
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+4. Add these environment variables to `.env.local`:
+```env
+API_KEY=your_playai_api_key
+USER_ID=your_playai_user_id
+TTS_API_URL=https://api.play.ai/v1/tts/stream
+UPLOADTHING_TOKEN=your_uploadthing_token
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+5. Run the app:
+```bash
+npm run dev
+```
 
-## Learn More
+## Tech Stack
 
-To learn more about Next.js, take a look at the following resources:
+- Next.js 15 for the framework
+- PDF.js for PDF rendering
+- PlayAI SDK for text-to-speech
+- Uploadthing for file storage
+- Tailwind CSS for styling
+- Shadcn UI for components
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Design Decisions
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Used PDF.js for reliable PDF rendering across browsers
+- Implemented client-side text extraction for better TTS quality
+- Added voice caching to improve playback performance
+- Built a responsive UI that works well on both desktop and mobile
+- Used Uploadthing for secure file storage and handling
 
-## Deploy on Vercel
+## Features
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- PDF upload and viewing
+- Text-to-speech with multiple voices
+- Page navigation
+- Audio controls (play/pause, seek, speed)
+- Sidebar navigation
+- Voice chat interface
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Voices Available
+
+- Angelo (Conversational)
+- Deedee (Conversational)
+- Jennifer (Conversational)
+- Briggs (Narrative)
+- Samara (Conversational)
