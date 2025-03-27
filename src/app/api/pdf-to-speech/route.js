@@ -303,9 +303,6 @@ export async function GET(req) {
   }
 }
 
-// Remove circular reference
-// export { POST as POST } from './route.js';
-
 
 
 
