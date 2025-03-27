@@ -1,4 +1,4 @@
-import { createRouteHandler } from "uploadthing/next"; // Updated import
+import { createRouteHandler } from "uploadthing/next";
 import { UTApi } from "uploadthing/server";
 import { ourFileRouter } from "@/lib/uploadthing";
 
@@ -7,5 +7,5 @@ export const { GET, POST } = createRouteHandler({
   router: ourFileRouter,
 });
 
-// Create an instance
+// Create an instance for server-side operations
 export const utapi = new UTApi(); 

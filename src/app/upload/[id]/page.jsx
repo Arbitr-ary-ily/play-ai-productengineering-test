@@ -1466,7 +1466,7 @@ export default function PDFViewerPage() {
       
       <div className="mt-6 text-center">
         <p className="text-sm text-gray-500">
-          Powered by <Link href="https://play.ai" target="_blank" className="text-lime-500 hover:text-lime-600 transition-all duration-300 font-medium hover:underline"><span>PlayAI Text-to-Speech</span></Link>
+          Powered by <Link href="https://play.ai" target="_blank" className="text-lime-500 hover:text-lime-600 transition-all duration-300 font-medium hover:underline"><span>PlayAI TTS</span></Link>
         </p>
       </div>
     </div>
