@@ -17,11 +17,13 @@ const BASE_URL = process.env.TTS_API_URL || "https://api.play.ai/api/v1";
 const DEFAULT_VOICE = 's3://voice-cloning-zero-shot/baf1ef41-36b6-428c-9bdf-50ba54682bd8/original/manifest.json';
 const MODEL_NAME = "PlayDialog";
 const OUTPUT_FORMAT = "mp3";
-const MAX_CHUNK_SIZE = 15000; 
-const REQUEST_TIMEOUT = 55000; // 55 seconds timeout (leaving 5 seconds buffer)
+const MAX_CHUNK_SIZE = 20000; // Increased chunk size
+const REQUEST_TIMEOUT = 75000; // 75 seconds timeout
+const MAX_CONCURRENT_REQUESTS = 5; // Increased concurrency for Fluid Compute
 
-// In-memory cache for audio data
+// In-memory cache for audio data with TTL
 const audioCache = new Map();
+const CACHE_TTL = 1000 * 60 * 60; // 1 hour
 
 /**
  * Clean text for TTS processing
@@ -85,135 +87,80 @@ function splitTextIntoChunks(text) {
 }
 
 /**
- * Make request to Play.ai API and cache the response
+ * Process chunks in parallel with rate limiting and retries
  */
-async function makePlayAIRequest(text, options = {}) {
-  const cacheKey = generateCacheKey(text, options.voice);
+async function processChunksInParallel(chunks, options) {
+  const results = [];
+  const errors = [];
+  const retries = 3;
   
-  // Check cache first
-  if (audioCache.has(cacheKey)) {
-    console.log('Using cached audio data');
-    return audioCache.get(cacheKey);
+  // Process chunks in batches to avoid overwhelming the API
+  for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_REQUESTS) {
+    const batch = chunks.slice(i, i + MAX_CONCURRENT_REQUESTS);
+    const batchPromises = batch.map(async (chunk, index) => {
+      let lastError;
+      
+      for (let attempt = 0; attempt < retries; attempt++) {
+        try {
+          const response = await fetch(`${BASE_URL}/tts/stream`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${API_KEY}`,
+              'X-USER-ID': USER_ID,
+            },
+            body: JSON.stringify({
+              model: MODEL_NAME,
+              text: chunk,
+              voice: options.voice,
+              outputFormat: OUTPUT_FORMAT,
+              speed: options.speed || 1,
+              temperature: options.temperature || 1,
+              sampleRate: 24000,
+              language: "english"
+            }),
+          });
+
+          if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Failed to generate audio: ${error || response.statusText}`);
+          }
+
+          const buffer = await response.arrayBuffer();
+          return { success: true, buffer, index: i + index };
+        } catch (error) {
+          lastError = error;
+          if (attempt < retries - 1) {
+            // Exponential backoff
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+          }
+        }
+      }
+      
+      return { success: false, error: lastError, index: i + index };
+    });
+
+    const batchResults = await Promise.all(batchPromises);
+    
+    // Sort results by original index to maintain order
+    batchResults.forEach(result => {
+      if (result.success) {
+        results[result.index] = result.buffer;
+      } else {
+        errors.push({ index: result.index, error: result.error });
+      }
+    });
   }
 
-  const headers = {
-    'Authorization': `Bearer ${API_KEY}`,
-    'Content-Type': 'application/json',
-    'X-USER-ID': USER_ID,
-  };
-
-  const payload = {
-    text,
-    voice: options.voice || DEFAULT_VOICE,
-    model: MODEL_NAME,
-    outputFormat: OUTPUT_FORMAT,
-    speed: 1,
-    sampleRate: 24000,
-    language: 'english'
-  };
-
-  console.log('Making request to Play.ai with payload:', {
-    textLength: text.length,
-    voice: payload.voice,
-    model: payload.model
-  });
-
-  const response = await fetch(`${BASE_URL}/tts/stream`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    console.error('Play.ai API Error:', error);
-    throw new Error(`PlayAI API Error: ${error || response.statusText}`);
+  if (errors.length > 0) {
+    throw new Error(`Failed to process ${errors.length} chunks: ${errors.map(e => e.error).join(', ')}`);
   }
 
-  // Cache the audio data
-  const buffer = await response.arrayBuffer();
-  audioCache.set(cacheKey, buffer);
-  
-  return buffer;
+  return results;
 }
 
 /**
- * Handle range requests for audio streaming
- */
-function handleRangeRequest(buffer, range) {
-  // If no range header or invalid range, return the full buffer
-  if (!range || typeof range !== 'string') {
-    return {
-      buffer,
-      start: 0,
-      end: buffer.byteLength - 1,
-      contentLength: buffer.byteLength
-    };
-  }
-
-  const bytes = range.match(/bytes=(\d+)-(\d+)?/);
-  if (!bytes) {
-    return {
-      buffer,
-      start: 0,
-      end: buffer.byteLength - 1,
-      contentLength: buffer.byteLength
-    };
-  }
-
-  const start = parseInt(bytes[1], 10);
-  const end = bytes[2] ? parseInt(bytes[2], 10) : buffer.byteLength - 1;
-  
-  // Validate start and end values
-  const validStart = !isNaN(start) && start >= 0 && start < buffer.byteLength;
-  const validEnd = !isNaN(end) && end >= start && end < buffer.byteLength;
-  
-  if (!validStart || !validEnd) {
-    return {
-      buffer,
-      start: 0,
-      end: buffer.byteLength - 1,
-      contentLength: buffer.byteLength
-    };
-  }
-  
-  return {
-    buffer: buffer.slice(start, end + 1),
-    start,
-    end,
-    contentLength: buffer.byteLength
-  };
-}
-
-/**
- * Create a streaming response from multiple audio chunks
- */
-async function createMultipartStream(chunks) {
-  try {
-    // Collect all audio buffers
-    const buffers = await Promise.all(
-      chunks.map(chunk => makePlayAIRequest(chunk))
-    );
-    
-    // Combine all buffers
-    const totalLength = buffers.reduce((acc, buf) => acc + buf.byteLength, 0);
-    const combinedBuffer = new Uint8Array(totalLength);
-    let offset = 0;
-    
-    for (const buffer of buffers) {
-      combinedBuffer.set(new Uint8Array(buffer), offset);
-      offset += buffer.byteLength;
-    }
-    
-    return combinedBuffer.buffer;
-  } catch (error) {
-    console.error('Error in stream processing:', error);
-    throw error;
-  }
-}
-
-/**
- * POST handler for text-to-speech streaming
+ * POST handler for text-to-speech streaming with Fluid Compute optimization
  */
 export async function POST(req) {
   try {
@@ -238,41 +185,12 @@ export async function POST(req) {
     // Start the audio generation process
     const generateAudio = async () => {
       try {
-        const audioBuffers = [];
-        let processedChunks = 0;
-
-        for (const chunk of chunks) {
-          const response = await fetch('https://api.play.ai/api/v1/tts/stream', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${API_KEY}`,
-              'X-USER-ID': USER_ID,
-            },
-            body: JSON.stringify({
-              model: "PlayDialog",
-              text: chunk,
-              voice: voice,
-              outputFormat: "mp3",
-              speed: speed || 1,
-              temperature: temperature || 1,
-              sampleRate: 24000,
-              language: "english"
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error('Failed to generate audio');
-          }
-
-          const buffer = await response.arrayBuffer();
-          audioBuffers.push(buffer);
-          processedChunks++;
-
-          // Send progress update
-          const progress = Math.min(99, Math.floor((processedChunks / totalChunks) * 100));
-          await writer.write(encoder.encode(`data: ${JSON.stringify({ progress })}\n\n`));
-        }
+        // Process chunks in parallel with retries
+        const audioBuffers = await processChunksInParallel(chunks, {
+          voice,
+          speed,
+          temperature
+        });
 
         // Combine all audio buffers
         const totalLength = audioBuffers.reduce((acc, buf) => acc + buf.byteLength, 0);
@@ -320,7 +238,7 @@ export async function POST(req) {
   } catch (error) {
     console.error('Error in text-to-speech API:', error);
     return NextResponse.json(
-      { error: 'Failed to generate audio' },
+      { error: error.message || 'Failed to generate audio' },
       { status: 500 }
     );
   }
